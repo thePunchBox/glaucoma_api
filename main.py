@@ -13,7 +13,7 @@ app = FastAPI(title="Glaucoma Detection API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://glaucoma-frontend.vercel.app/"],  # or ["http://localhost:3000"] for React only
+    allow_origins=["*"],  # or ["http://localhost:3000"] for React only
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
