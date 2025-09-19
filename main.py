@@ -9,6 +9,8 @@ import numpy as np
 import io
 import os
 import hashlib
+import matplotlib.pyplot as plt
+import base64
 
 # Initialize FastAPI app
 app = FastAPI(title="Glaucoma Detection API")
@@ -51,6 +53,7 @@ def preprocess_image(image_bytes):
     return img_array
 
 # -------- Normal Prediction Endpoint --------
+
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     if file.content_type.split("/")[0] != "image":
@@ -68,9 +71,57 @@ async def predict(file: UploadFile = File(...)):
         result = "Normal"
         confidence = (1 - float(prediction)) * 100
 
+    # --- Heatmap Generation ---
+    # Grad-CAM or similar method assumed; here is a placeholder for heatmap logic
+    # For demonstration, we'll use a dummy heatmap (all zeros) if you don't have Grad-CAM implemented
+    # Replace this with your actual heatmap code if available
+    try:
+        # Example: get last conv layer
+        last_conv_layer = model.get_layer(index=-3)  # You may need to adjust this
+        grad_model = tf.keras.models.Model(
+            [model.inputs], [last_conv_layer.output, model.output]
+        )
+        with tf.GradientTape() as tape:
+            conv_outputs, predictions = grad_model(img_array)
+            loss = predictions[:, 0]
+        grads = tape.gradient(loss, conv_outputs)
+        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        conv_outputs = conv_outputs[0]
+        heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+        heatmap = tf.squeeze(heatmap)
+        heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+        heatmap = heatmap.numpy()
+    except Exception as e:
+        heatmap = np.zeros((IMG_SIZE[0], IMG_SIZE[1]))
+
+    # Convert heatmap to RGB
+    heatmap = np.uint8(255 * heatmap)
+    jet = plt.cm.get_cmap("jet")
+    jet_colors = jet(np.arange(256))[:, :3]
+    jet_heatmap = jet_colors[heatmap]
+
+    # Resize heatmap to original image size
+    jet_heatmap = tf.keras.preprocessing.image.array_to_img(jet_heatmap)
+    jet_heatmap = jet_heatmap.resize(IMG_SIZE)
+    jet_heatmap = tf.keras.preprocessing.image.img_to_array(jet_heatmap)
+
+    # Superimpose heatmap on original image
+    original_img = Image.open(io.BytesIO(image_bytes)).resize(IMG_SIZE).convert("RGB")
+    original_img_arr = img_to_array(original_img)
+    superimposed_img = jet_heatmap * 0.4 + original_img_arr
+    superimposed_img = tf.keras.preprocessing.image.array_to_img(superimposed_img)
+
+    # Save heatmap to bytes
+    buf = io.BytesIO()
+    superimposed_img.save(buf, format="PNG")
+    buf.seek(0)
+    heatmap_bytes = buf.read()
+    heatmap_b64 = base64.b64encode(heatmap_bytes).decode("utf-8")
+
     return {
         "prediction": result,
-        "confidence": f"{confidence:.2f}%"
+        "confidence": f"{confidence:.2f}%",
+        "heatmap": heatmap_b64
     }
 
 # -------- Debugging Endpoint --------
